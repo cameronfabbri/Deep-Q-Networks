@@ -4,7 +4,7 @@ import cv2
 from tqdm import tqdm
 from random import randint
 import tensorflow as tf
-import architecture as arch
+import architecture
 
 def get_feed_dict(batch_size, images_placeholder, seq_length, replay_database):
 
@@ -12,9 +12,13 @@ def get_feed_dict(batch_size, images_placeholder, seq_length, replay_database):
    replay_size = len(replay_database)
 
    start = randint(0, replay_size-seq_length)
+   end = start + seq_length
+   print 'start: ', start
+   print 'end:   ', end
+   exit()
 
    feed_dict = {
-      images_placeholder: original_images,
+      images_placeholder: [0],
    }
 
    return feed_dict
@@ -30,7 +34,7 @@ def get_feed_dict(batch_size, images_placeholder, seq_length, replay_database):
    After it'll be sending in batch_size*seq_length into the network
 
 '''
-def train(replay_database, seq_length, SHAPE):
+def train(replay_database, seq_length, SHAPE, batch_size):
 
 
    # set up computational graph
@@ -38,12 +42,13 @@ def train(replay_database, seq_length, SHAPE):
       global_step = tf.Variable(0, name='global_step', trainable=False)
       
       # tensor of size batch, width, height, channels*seq_length
-      images_placeholder = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], 3*seq_length)) 
-      next_step_image    = tf.placeholder(tf.float32, shape=(1, SHAPE[1], SHAPE[0], 3))
+      images_placeholder = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], 1*seq_length)) 
+      next_step_image    = tf.placeholder(tf.float32, shape=(1, SHAPE[1], SHAPE[0], 1))
 
       # Q values for each action
-      target_value = architecture.inference(images_placeholder, 'train')
-      actual_value = architecture.inference(next_step_image, 'train')
+      target_value = architecture.inference(images_placeholder)
+      tf.get_variable_scope().reuse_variables()
+      actual_value = architecture.inference(next_step_image)
 
       loss = architecture.loss(target_value, actual_value)
       
@@ -63,9 +68,10 @@ def train(replay_database, seq_length, SHAPE):
            Loss: Net(s_i)(a_i) - (r_i+1 max(Net(s_i+1)))
          '''
 
-         # get sequence and run through network to get max action
+         # get sequence
          feed_dict = get_feed_dict(batch_size, images_placeholder, seq_length, replay_database)
 
+         # run sequence through to get the values for each action
          
 
          action = env.action_space.sample()
@@ -85,7 +91,7 @@ if __name__ == '__main__':
    game        = 'Breakout-v0'  # name of the game ... heh
    game_num    = 1              # always start at first game
    num_actions = 6              # number of actions for the game
-   SIZE        = (84, 84)     # NEW size of the screen input (if RGB don't need 3rd dimension)
+   SHAPE        = (84, 84)     # NEW size of the screen input (if RGB don't need 3rd dimension)
    env         = gym.make(game) # create the game
    play_random = 20            # number of steps to play randomly
    seq_length  = 4              # length of sequence for input
@@ -100,7 +106,7 @@ if __name__ == '__main__':
 
    print 'Game: ', game
    print 'Game number: ', game_num
-   print 'Input size: ', SIZE
+   print 'Input size: ', SHAPE
    print 
    print 'Randomly playing to fill database'
    print
@@ -110,7 +116,7 @@ if __name__ == '__main__':
       initial_observation = env.reset() # first image/state
 
       # resize the image
-      initial_observation = cv2.resize(initial_observation, SIZE, interpolation=cv2.INTER_CUBIC)
+      initial_observation = cv2.resize(initial_observation, SHAPE, interpolation=cv2.INTER_CUBIC)
 
       # possibly convert to gray
       if grayscale:
@@ -128,7 +134,7 @@ if __name__ == '__main__':
          current_state, reward, done, info = env.step(action) # take a step in the environment
 
          # resize image
-         current_state = cv2.resize(current_state, SIZE, interpolation=cv2.INTER_CUBIC)
+         current_state = cv2.resize(current_state, SHAPE, interpolation=cv2.INTER_CUBIC)
 
          # possibly convert to gray
          if grayscale:
@@ -142,7 +148,7 @@ if __name__ == '__main__':
          else:
             # this is correct because it grabs the [-1] from the experience list, aka the
             # 'current_state' after completing the last action
-            previous_state = cv2.resize(experience_list[step-1][-1], SIZE, interpolation=cv2.INTER_CUBIC)
+            previous_state = cv2.resize(experience_list[step-1][-1], SHAPE, interpolation=cv2.INTER_CUBIC)
 
             # previous state should already be gray since it's coming from the last step
 
