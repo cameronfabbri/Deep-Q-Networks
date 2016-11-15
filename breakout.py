@@ -149,7 +149,7 @@ def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma,
          choice = randomChoice([0,1], [initial_rand, 1-initial_rand])
          
          # choose random action
-         if choice == 1:
+         if choice == 0:
             action = randint(0, num_actions-1)
             state, reward, done, info = env.step(action)
          else: # do NOT choose a random action, run inference sending just image states
@@ -158,6 +158,14 @@ def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma,
             action = np.argmax(action_values) # get argmax action from values
             state, reward, done, info = env.step(action) # run that action in the emulator
 
+            '''
+               for tomorrow:
+                  - get the decaying random working
+                  - follow rest of algorithm
+                  - remember to do same action for seq_length
+
+
+            '''
 
          #exit()
 
