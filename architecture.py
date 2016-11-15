@@ -73,16 +73,50 @@ def _fc_layer(inputs, hiddens, idx, flat, linear):
     ip = tf.add(tf.matmul(inputs_processed,weights),biases)
     return tf.maximum(FLAGS.alpha*ip,ip,name=str(idx)+'_fc')
 
-def inference(images):
-   conv1 = _conv_layer(images, 8, 4, 16, 1)
+'''
+   Makes a prediction for training
+'''
+def predict(states, actions):
+   conv1 = _conv_layer(states, 8, 4, 16, 1)
    conv2 = _conv_layer(conv1, 4, 2, 32, 2)
 
    fc1 = _fc_layer(conv2, 256, 3, True, False)
    fc2 = _fc_layer(fc1, 6, 4, False, True)
 
+   #print fc2
+   #exit()
+   # need to index fc2 by whatever the action number is and return it
+   
+   #action_value = fc2[actions]
+   #return action_value
+   return fc2
+
+
+'''
+   Trains the network. This will return values for all possible actions.
+   When those values get returned, take the argmax
+'''
+def train(states):
+   conv1 = _conv_layer(states, 8, 4, 16, 5)
+   conv2 = _conv_layer(conv1, 4, 2, 32, 6)
+
+   fc1 = _fc_layer(conv2, 256, 7, True, False)
+   fc2 = _fc_layer(fc1, 6, 8, False, True)
+   return fc2
+
+
+'''
+   Makes a prediction that is used in the actual emulator
+'''
+def inference(states):
+   conv1 = _conv_layer(states, 8, 4, 16, 9)
+   conv2 = _conv_layer(conv1, 4, 2, 32, 10)
+
+   fc1 = _fc_layer(conv2, 256, 11, True, False)
+   fc2 = _fc_layer(fc1, 6, 12, False, True)
+
    return fc2
  
-def loss (target, actual):
-   error = tf.reduce_mean(tf.square(target-actual))
-   #error = tf.nn.l2_loss(input_images - predicted_images)
+def loss(predicted_value, actual_value, gamma):
+   error = tf.reduce_sum(predicted_value - (gamma*actual_value))
    return error 
