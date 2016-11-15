@@ -5,74 +5,133 @@ from tqdm import tqdm
 from random import randint
 import tensorflow as tf
 import architecture
+import numpy as np
 
-def get_feed_dict(batch_size, images_placeholder, seq_length, replay_database):
+def getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database):
 
    # get the size of the database
    replay_size = len(replay_database)
 
    start = randint(0, replay_size-seq_length)
    end = start + seq_length
-   print 'start: ', start
-   print 'end:   ', end
-   exit()
+
+   state_list  = []
+
+   for i in range(start, end):
+      state_list.append(replay_database[i][0])
+
+   states = np.asarray(state_list)
+   
+   # IMPORTANT!!
+   # only take the last action for each sequence
+   actions = np.asarray(replay_database[end-1][1])
 
    feed_dict = {
-      images_placeholder: [0],
+      state_i_p: states,
+      action_p: actions
    }
 
    return feed_dict
 
+'''
+   Takes in the two choices and a probability for each choice
+
+   choices: choose a random action, or select max(action) from running the network
+            [0,1]: 0 for random aciton, 1 for running the network
+
+   probabilities: initially start at 100% probability to choose random, then decay to 0.1
+            [0.0, 1.0]
+'''
+def randomChoice(choices, probabilities):
+   x = random.uniform(0,1)
+   cum_prob = 0.0
+   
+   for choice, prob in zip(choices, probabilities):
+      cum_prob += prob
+      if x < cum_prob:
+         break
+   return choice
+
 
 '''
-   Training will sample randomly
-   Future updates: take in boolean gray as an input so the network
-   is modular, aka can train on color or gray
+   Perform inference on what's currently going on in the emulator and put that
+   in the database.
 
-   starting with batch size 1 just so I can understand all the parts
+   Grab a random 4 sequence from the database. Get the action from the last state
+   in that sequence.
 
-   After it'll be sending in batch_size*seq_length into the network
+   Send the sequence through the network, and get the value that the last action
+   outputs.
 
+   Get the maximum value from sending the next state through the network.
+
+   loss = Net(S_i)[a_i] - (gamma + max(Net(s_i+1)))
+
+   Copy the weights of the network to the one running inference every X steps
 '''
-def train(replay_database, seq_length, SHAPE, batch_size):
+def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma, rand):
 
+   initial_rand = rand[0]
+   final_rand  = rand[1]
+  
+   # start rand at the init, then decay it to final rand
+   rand = inital_rand
 
    # set up computational graph
    with tf.Graph().as_default():
       global_step = tf.Variable(0, name='global_step', trainable=False)
       
-      # tensor of size batch, width, height, channels*seq_length
-      images_placeholder = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], 1*seq_length)) 
-      next_step_image    = tf.placeholder(tf.float32, shape=(1, SHAPE[1], SHAPE[0], 1))
+      state_i_p    = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
+      next_state_p = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
+      action_p     = tf.placeholder(tf.float32, shape=(batch_size, 1))
 
-      # Q values for each action
-      target_value = architecture.inference(images_placeholder)
-      tf.get_variable_scope().reuse_variables()
-      actual_value = architecture.inference(next_step_image)
+      # first choose an action to take - observe reward and image - update weights every X steps
+      action_choice = architecture.inference(state_i_p)
 
-      loss = architecture.loss(target_value, actual_value)
+      # predict what the action taken will give you by returning its output
+      predicted_value = architecture.predict(state_i_p, action_p)
       
-      '''
-         grab random batch -> replay database must be of size larger than batch_size*seq_length
-         pick random start spot. Ensures it does not extend the db and also only picks things
-         once per iteration
-      '''
+      # get the actual value the action you took was by taking the max of all values returned
+      actual_value = architecture.train(next_state_p)
 
+      # get the loss between the predicted value and the actual value from the action
+      loss = architecture.loss(predicted_value, actual_value, gamma)
+
+      train_op = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(loss, global_step=global_step)
+
+      variables = tf.all_variables()
+      init      = tf.initialize_all_variables()
+      sess      = tf.Session()
+
+      try:
+         os.mkdir(checkpoint_dir)
+      except:
+         pass
+
+      sess.run(init)
+      print '\nRunning session...\n'
+
+      saver = tf.train.Saver(variables)
+
+      tf.train.start_queue_runners(sess=sess)
+
+      graph_def = sess.graph.as_graph_def(add_shapes=True)
+      summary_writer = tf.train.SummaryWriter(checkpoint_dir+"training", graph_def=graph_def)
+
+      step = int(sess.run(global_step))
+
+      print 'Entering training loop...\n'
       while True:
-         # start a new game
-         initial_observation = env.reset()
+         step += 1
 
-         '''
-           The input is the current state image
-           The output is the predicted Q value for each action
-           Loss: Net(s_i)(a_i) - (r_i+1 max(Net(s_i+1)))
-         '''
+         # determine whether or not to choose a random action or use the network
+         choice = randomChoice([0,1], [initial_rand, 1-initial_rand])
+         print choice
+         exit()
+         initial_observation = env.reset() # start a new game
 
          # get sequence
-         feed_dict = get_feed_dict(batch_size, images_placeholder, seq_length, replay_database)
-
-         # run sequence through to get the values for each action
-         
+         feed_dict = getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database)
 
          action = env.action_space.sample()
          state, reward, done, info, = env.step(action)
@@ -91,12 +150,19 @@ if __name__ == '__main__':
    game        = 'Breakout-v0'  # name of the game ... heh
    game_num    = 1              # always start at first game
    num_actions = 6              # number of actions for the game
-   SHAPE        = (84, 84)     # NEW size of the screen input (if RGB don't need 3rd dimension)
+   SHAPE       = (84, 84)       # NEW size of the screen input (if RGB don't need 3rd dimension)
    env         = gym.make(game) # create the game
    play_random = 20            # number of steps to play randomly
    seq_length  = 4              # length of sequence for input
    grayscale   = True           # whether or not to use grayscale images instead of rgb
    batch_size  = 1              # size of the batch. Network will receive size batch_size*seq_length*dims
+   gamma       = 0.99           # Decay rate of future rewards
+   initial_rand = 1.0            # starting probability that you will pick a random action
+   final_rand  = 0.1            # final probability that you will pick a random action
+
+   checkpoint_dir = 'models/'
+
+   rand = [initial_rand, final_rand]
 
    # the number of viable actions to take given the loaded game
    num_actions = int(str(env.action_space).split('(')[-1].split(')')[0])
@@ -178,6 +244,11 @@ if __name__ == '__main__':
       print 'current_state: ', experience[3].shape
       exit()
    '''
-
+   
+   print
    print 'Done with filling database'
-   train(replay_database, seq_length, SHAPE, batch_size) 
+   print
+   print 'Replay database size: ', len(replay_database)
+   print
+
+   train(replay_database, seq_length, SHAPE, batch_size, gamma, rand)
