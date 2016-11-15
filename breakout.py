@@ -6,30 +6,41 @@ from random import randint
 import tensorflow as tf
 import architecture
 import numpy as np
+import random
 
-def getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database):
+def getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database, predict, SHAPE):
+
+   # predict determines if the feed dictionary is being used for prediction or not.
+   # if it is, then don't put the action in the feed_dict
 
    # get the size of the database
    replay_size = len(replay_database)
 
-   start = randint(0, replay_size-seq_length)
-   end = start + seq_length
+   start = randint(0, replay_size-(seq_length*batch_size))
+   end = (start + (seq_length*batch_size))
 
-   state_list  = []
+   # list containing the stacked sequences. (batch_size, SIZE[0], SIZE[1], seq_length)
+   states = []
 
-   for i in range(start, end):
-      state_list.append(replay_database[i][0])
-
-   states = np.asarray(state_list)
+   all_states = np.asarray([replay_database[_][0] for _ in range(start, end)])
    
-   # IMPORTANT!!
-   # only take the last action for each sequence
-   actions = np.asarray(replay_database[end-1][1])
+   split_states = np.asarray(np.split(all_states, seq_length))
+   split_states = np.reshape(split_states, (batch_size, SHAPE[0], SHAPE[1], seq_length))
 
-   feed_dict = {
-      state_i_p: states,
-      action_p: actions
-   }
+   for s in split_states:
+      states.append(s)
+   states = np.asarray(states)
+
+   if predict:
+      actions   = np.asarray(replay_database[end-1][1])
+      feed_dict = {
+         state_i_p: states,
+         action_p: actions
+      }
+   else:
+      feed_dict = {
+         state_i_p: states
+      }
 
    return feed_dict
 
@@ -69,13 +80,15 @@ def randomChoice(choices, probabilities):
 
    Copy the weights of the network to the one running inference every X steps
 '''
-def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma, rand):
+def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma, rand, num_actions):
+
+   game_num = 1
 
    initial_rand = rand[0]
-   final_rand  = rand[1]
-  
+   final_rand   = rand[1]
+
    # start rand at the init, then decay it to final rand
-   rand = inital_rand
+   rand = initial_rand
 
    # set up computational graph
    with tf.Graph().as_default():
@@ -83,6 +96,8 @@ def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma,
       
       state_i_p    = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
       next_state_p = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
+      #state_i_p    = tf.placeholder(tf.float32, shape=(seq_length, SHAPE[1], SHAPE[0])) 
+      #next_state_p = tf.placeholder(tf.float32, shape=(seq_length, SHAPE[1], SHAPE[0])) 
       action_p     = tf.placeholder(tf.float32, shape=(batch_size, 1))
 
       # first choose an action to take - observe reward and image - update weights every X steps
@@ -122,24 +137,36 @@ def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma,
 
       print 'Entering training loop...\n'
       while True:
+         if step == 0:
+            initial_observation = env.reset() # start a new game
+         
+         env.render()
+
          step += 1
+         print 'Step: ', step
 
          # determine whether or not to choose a random action or use the network
          choice = randomChoice([0,1], [initial_rand, 1-initial_rand])
-         print choice
-         exit()
-         initial_observation = env.reset() # start a new game
+         
+         # choose random action
+         if choice == 1:
+            action = randint(0, num_actions-1)
+            state, reward, done, info = env.step(action)
+         else: # do NOT choose a random action, run inference sending just image states
+            feed_dict = getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database, False, SHAPE)
+            action_values = np.asarray(sess.run([action_choice], feed_dict=feed_dict)[0][0])
+            action = np.argmax(action_values) # get argmax action from values
+            state, reward, done, info = env.step(action) # run that action in the emulator
 
-         # get sequence
-         feed_dict = getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database)
 
-         action = env.action_space.sample()
-         state, reward, done, info, = env.step(action)
+         #exit()
 
-         #if done:
-         #   game_num += 1
-         #   print 'Game number: ', game_num
-         #   observation = env.reset()
+         #state, reward, done, info = env.step(action)
+
+         if done:
+            game_num += 1
+            print 'Game number: ', game_num
+            initial_observation = env.reset()
 
 if __name__ == '__main__':
 
@@ -147,18 +174,18 @@ if __name__ == '__main__':
       General options
       Maybe these should be parameters or something in the future...fine for now
    '''
-   game        = 'Breakout-v0'  # name of the game ... heh
-   game_num    = 1              # always start at first game
-   num_actions = 6              # number of actions for the game
-   SHAPE       = (84, 84)       # NEW size of the screen input (if RGB don't need 3rd dimension)
-   env         = gym.make(game) # create the game
-   play_random = 20            # number of steps to play randomly
-   seq_length  = 4              # length of sequence for input
-   grayscale   = True           # whether or not to use grayscale images instead of rgb
-   batch_size  = 1              # size of the batch. Network will receive size batch_size*seq_length*dims
-   gamma       = 0.99           # Decay rate of future rewards
+   game         = 'Breakout-v0'  # name of the game ... heh
+   game_num     = 1              # always start at first game
+   num_actions  = 6              # number of actions for the game
+   SHAPE        = (84, 84)       # NEW size of the screen input (if RGB don't need 3rd dimension)
+   env          = gym.make(game) # create the game
+   play_random  = 10            # number of steps to play randomly
+   seq_length   = 4              # length of sequence for input
+   grayscale    = True           # whether or not to use grayscale images instead of rgb
+   batch_size   = 1              # size of the batch. Network will receive size batch_size*seq_length*dims
+   gamma        = 0.99           # Decay rate of future rewards
    initial_rand = 1.0            # starting probability that you will pick a random action
-   final_rand  = 0.1            # final probability that you will pick a random action
+   final_rand   = 0.1            # final probability that you will pick a random action
 
    checkpoint_dir = 'models/'
 
@@ -251,4 +278,4 @@ if __name__ == '__main__':
    print 'Replay database size: ', len(replay_database)
    print
 
-   train(replay_database, seq_length, SHAPE, batch_size, gamma, rand)
+   train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma, rand, num_actions)
