@@ -8,7 +8,7 @@ import architecture
 import numpy as np
 import random
 
-def getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database, predict, SHAPE):
+def getFeedDict(batch_size, state_t_p, action_p, seq_length, replay_database, predict, SHAPE):
 
    # predict determines if the feed dictionary is being used for prediction or not.
    # if it is, then don't put the action in the feed_dict
@@ -34,12 +34,12 @@ def getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database, pr
    if predict:
       actions   = np.asarray(replay_database[end-1][1])
       feed_dict = {
-         state_i_p: states,
+         state_t_p: states,
          action_p: actions
       }
    else:
       feed_dict = {
-         state_i_p: states
+         state_t_p: states
       }
 
    return feed_dict
@@ -94,20 +94,19 @@ def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma,
    with tf.Graph().as_default():
       global_step = tf.Variable(0, name='global_step', trainable=False)
       
-      state_i_p    = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
+      state_t_p    = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
       next_state_p = tf.placeholder(tf.float32, shape=(batch_size, SHAPE[1], SHAPE[0], seq_length)) 
-      #state_i_p    = tf.placeholder(tf.float32, shape=(seq_length, SHAPE[1], SHAPE[0])) 
-      #next_state_p = tf.placeholder(tf.float32, shape=(seq_length, SHAPE[1], SHAPE[0])) 
       action_p     = tf.placeholder(tf.float32, shape=(batch_size, 1))
 
       # first choose an action to take - observe reward and image - update weights every X steps
-      action_choice = architecture.inference(state_i_p)
+      action_choice = architecture.inference(state_t_p)
 
       # predict what the action taken will give you by returning its output
-      predicted_value = architecture.predict(state_i_p, action_p)
+      predicted_value = architecture.predict(state_t_p, action_p)
       
       # get the actual value the action you took was by taking the max of all values returned
-      actual_value = architecture.train(next_state_p)
+      #actual_value = architecture.train(next_state_p)
+      actual_value = architecture.train(state_t_p)
 
       # get the loss between the predicted value and the actual value from the action
       loss = architecture.loss(predicted_value, actual_value, gamma)
@@ -135,43 +134,88 @@ def train(checkpoint_dir, replay_database, seq_length, SHAPE, batch_size, gamma,
 
       step = int(sess.run(global_step))
 
-      print 'Entering training loop...\n'
+      # this just grabs the first 4 frames of the game and puts them in s_t for use on the first step
+      i = 0
+      s_t = []
+      while i <= 4:
+         # just starting a game
+         if i == 0:
+            state = env.reset()
+            env.render()
+            i += 1
+         else: # adding 3 more to the state
+            action = randint(0, num_actions-1)
+            state = env.step(action)[0]
+            state = cv2.resize(state, SHAPE, interpolation=cv2.INTER_CUBIC)
+            state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
+            s_t.append(state)
+            i += 1
+
+      s_t = np.asarray(s_t)
+      s_t = np.swapaxes(s_t, 0, 2)
+      s_t = np.expand_dims(s_t, 0)
+      # now s_t contains a sequence of 4 states
+      
       while True:
-         if step == 0:
-            initial_observation = env.reset() # start a new game
-         
          env.render()
-
          step += 1
-         print 'Step: ', step
+         print 'Step:', step
 
+         # IMPORTANT - THIS SHOULD DECAY - SETTING TO 75% RAND FOR NOW
          # determine whether or not to choose a random action or use the network
-         choice = randomChoice([0,1], [initial_rand, 1-initial_rand])
-         
+         # choice = randomChoice([0,1], [initial_rand, 1-initial_rand])
+         # choice = randomChoice([0,1], [0.75, 0.25]) 75% rand, 25% inference
+         choice = randomChoice([0,1], [0, 1]) # 100% inference for testing
+
          # choose random action
          if choice == 0:
             action = randint(0, num_actions-1)
-            state, reward, done, info = env.step(action)
-         else: # do NOT choose a random action, run inference sending just image states
-            feed_dict = getFeedDict(batch_size, state_i_p, action_p, seq_length, replay_database, False, SHAPE)
-            action_values = np.asarray(sess.run([action_choice], feed_dict=feed_dict)[0][0])
+         else: # do NOT choose a random action, run inference on the current sequence. THIS ISN'T TRAIN!!
+            action_values = np.asarray(sess.run([action_choice], feed_dict={state_t_p:s_t})[0][0])
             action = np.argmax(action_values) # get argmax action from values
-            state, reward, done, info = env.step(action) # run that action in the emulator
-
-            '''
-               for tomorrow:
-                  - get the decaying random working
-                  - follow rest of algorithm
-                  - remember to do same action for seq_length
 
 
-            '''
+         # execute that action FOUR TIMES (or seq_length times)
+         s_t1   = []
+         reward = 0
+         for i in range(seq_length):
+            s_t1_, r, terminal, info = env.step(action) # take a step in the environment
+            s_t1_ = cv2.resize(s_t1_, SHAPE, interpolation=cv2.INTER_CUBIC)
+            s_t1_ = cv2.cvtColor(s_t1_, cv2.COLOR_RGB2GRAY)
 
-         #exit()
+            s_t1.append(s_t1_)
+            reward += r
 
-         #state, reward, done, info = env.step(action)
+         s_t1 = np.asarray(s_t1)
+         experience = [s_t, action, reward, s_t1]
+         replay_database.append(experience) # add to experince db
 
-         if done:
+         # set s_t to the current timestamp because the next time in the loop it will be the prev
+         s_t = s_t1
+
+         # NOW TRAIN
+         # sample minibatch from database - this has NOTHING to do with what's on screen
+         feed_dict = getFeedDict(batch_size, state_t_p, action_p, seq_length, replay_database, False, SHAPE)
+         
+         # send it a batch of states to the network
+         pred_val = sess.run([predicted_value], feed_dict=feed_dict)
+         act_val  = sess.run([actual_value], feed_dict=feed_dict)
+         print pred_val
+         print act_val
+         exit()
+
+         '''
+            for tomorrow:
+               - get the decaying random working
+               - follow rest of algorithm
+               - remember to do same action for seq_length
+
+
+         '''
+
+         #state, reward, terminal, info = env.step(action)
+
+         if terminal:
             game_num += 1
             print 'Game number: ', game_num
             initial_observation = env.reset()
@@ -232,7 +276,7 @@ if __name__ == '__main__':
 
          # execute the random action in the environment, get results
          # current state is the state AFTER taking an action (s_t+1)
-         current_state, reward, done, info = env.step(action) # take a step in the environment
+         current_state, reward, terminal, info = env.step(action) # take a step in the environment
 
          # resize image
          current_state = cv2.resize(current_state, SHAPE, interpolation=cv2.INTER_CUBIC)
@@ -255,8 +299,8 @@ if __name__ == '__main__':
 
             experience = [previous_state, action, reward, current_state]
 
-         # in case it ends before we are done filling our queue
-         if done:
+         # in case it ends before we are terminal filling our queue
+         if terminal:
             env.reset()
             game_num += 1
             print 'Game number: ', game_num

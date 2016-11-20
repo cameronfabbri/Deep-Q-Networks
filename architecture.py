@@ -1,94 +1,19 @@
 import tensorflow as tf
 import numpy as np
 import sys
+from tensorflow_ops import _conv_layer, _fc_layer, lrelu
 
-FLAGS = tf.app.flags.FLAGS
-
-num_epochs = 100
-
-tf.app.flags.DEFINE_float('weight_decay', 0.0005,
-                          """ """)
-tf.app.flags.DEFINE_float('alpha', 0.1,
-                          """Leaky RElu param""")
-
-def _variable_on_cpu(name, shape, initializer):
-   with tf.device('/cpu:0'):
-      var = tf.get_variable(name, shape, initializer=initializer)
-   return var
-
-
-def _variable_with_weight_decay(name, shape, stddev, wd):
-  """Helper to create an initialized Variable with weight decay.
-  Note that the Variable is initialized with a truncated normal distribution.
-  A weight decay is added only if one is specified.
-  Args:
-    name: name of the variable
-    shape: list of ints
-    stddev: standard deviation of a truncated Gaussian
-    wd: add L2Loss weight decay multiplied by this float. If None, weight
-        decay is not added for this Variable.
-  Returns:
-    Variable Tensor
-  """
-  var = _variable_on_cpu(name, shape,
-                         tf.truncated_normal_initializer(stddev=stddev))
-  if wd:
-    weight_decay = tf.mul(tf.nn.l2_loss(var), wd, name='weight_loss')
-    weight_decay.set_shape([])
-    tf.add_to_collection('losses', weight_decay)
-  return var
-
-
-def _conv_layer(inputs, kernel_size, stride, num_features, idx):
-   with tf.variable_scope('{0}_conv'.format(idx)) as scope:
-      input_channels = inputs.get_shape()[3]
-
-      weights = _variable_with_weight_decay('weights', shape=[kernel_size, kernel_size, input_channels, num_features], stddev=0.1, wd=FLAGS.weight_decay)
-      biases = _variable_on_cpu('biases', [num_features], tf.constant_initializer(0.1))
-
-      conv = tf.nn.conv2d(inputs, weights, strides=[1, stride, stride, 1], padding='SAME')
-      conv_biased = tf.nn.bias_add(conv, biases)
-
-      #Leaky ReLU
-      conv_rect = tf.maximum(FLAGS.alpha*conv_biased, conv_biased, name='{0}_conv'.format(idx))
-      return conv_rect
-
-
-def _fc_layer(inputs, hiddens, idx, flat, linear):
-  with tf.variable_scope('fc{0}'.format(idx)) as scope:
-    input_shape = inputs.get_shape().as_list()
-    
-    if flat:
-      dim = input_shape[1]*input_shape[2]*input_shape[3]
-      inputs_processed = tf.reshape(inputs, [-1,dim])
-    else:
-      dim = input_shape[1]
-      inputs_processed = inputs
-
-    weights = _variable_with_weight_decay('weights', shape=[dim,hiddens],stddev=0.01, wd=FLAGS.weight_decay)
-    biases = _variable_on_cpu('biases', [hiddens], tf.constant_initializer(0.01))
-    if linear:
-      return tf.add(tf.matmul(inputs_processed,weights),biases,name=str(idx)+'_fc')
-
-    ip = tf.add(tf.matmul(inputs_processed,weights),biases)
-    return tf.maximum(FLAGS.alpha*ip,ip,name=str(idx)+'_fc')
 
 '''
    Makes a prediction for training
 '''
 def predict(states, actions):
-   conv1 = _conv_layer(states, 8, 4, 16, 1)
-   conv2 = _conv_layer(conv1, 4, 2, 32, 2)
+   conv1 = lrelu(_conv_layer(states, 8, 4, 16, 'p_conv1'))
+   conv2 = lrelu(_conv_layer(conv1, 4, 2, 32, 'p_conv2'))
 
-   fc1 = _fc_layer(conv2, 256, 3, True, False)
-   fc2 = _fc_layer(fc1, 6, 4, False, True)
+   fc1 = lrelu(_fc_layer(conv2, 256, True, 'p_fc1'))
+   fc2 = lrelu(_fc_layer(fc1, 6, False, 'p_fc2'))
 
-   #print fc2
-   #exit()
-   # need to index fc2 by whatever the action number is and return it
-   
-   #action_value = fc2[actions]
-   #return action_value
    return fc2
 
 
@@ -97,11 +22,11 @@ def predict(states, actions):
    When those values get returned, take the argmax
 '''
 def train(states):
-   conv1 = _conv_layer(states, 8, 4, 16, 5)
-   conv2 = _conv_layer(conv1, 4, 2, 32, 6)
+   conv1 = lrelu(_conv_layer(states, 8, 4, 16, 't_conv1'))
+   conv2 = lrelu(_conv_layer(conv1, 4, 2, 32, 't_conv2'))
 
-   fc1 = _fc_layer(conv2, 256, 7, True, False)
-   fc2 = _fc_layer(fc1, 6, 8, False, True)
+   fc1 = lrelu(_fc_layer(conv2, 256, True, 't_fc1'))
+   fc2 = lrelu(_fc_layer(fc1, 6, False, 't_fc2'))
    return fc2
 
 
@@ -109,12 +34,13 @@ def train(states):
    Makes a prediction that is used in the actual emulator
 '''
 def inference(states):
-   conv1 = _conv_layer(states, 8, 4, 16, 9)
-   conv2 = _conv_layer(conv1, 4, 2, 32, 10)
+   conv1 = lrelu(_conv_layer(states, 8, 4, 16, 'i_conv1'))
+   conv2 = lrelu(_conv_layer(conv1, 4, 2, 32, 'i_conv2'))
 
-   fc1 = _fc_layer(conv2, 256, 11, True, False)
-   fc2 = _fc_layer(fc1, 6, 12, False, True)
-
+   fc1 = lrelu(_fc_layer(conv2, 256, True, 'i_fc1'))
+   fc2 = _fc_layer(fc1, 6, False, 'i_fc2')
+   
+   # this returns 6 actions
    return fc2
  
 def loss(predicted_value, actual_value, gamma):
