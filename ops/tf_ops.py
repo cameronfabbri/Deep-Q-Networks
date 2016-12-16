@@ -29,14 +29,6 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
    return var
 
 
-def select_action(s_t, epsilon=0.1):
-   if np.random.rand() < epsilon:
-      a = np.random.randint(6)
-   else:
-      print 'getting highest ranked action from network...'
-      a = 1
- 
-   return a
 
 
 def batch_norm(x, name, epsilon=1e-5, momentum=0.9, train=True):
