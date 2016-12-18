@@ -16,4 +16,7 @@ def preprocess(img):
    # crop
    img = img[110-84:110,:84]
 
+   # expand dims
+   img = np.expand_dims(img, 2)
+
    return img

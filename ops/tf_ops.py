@@ -29,6 +29,13 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
    return var
 
 
+def linear_annealing(n, total, p_initial, p_final):
+   """Linear annealing between p_initial and p_final
+   over total steps - computes value at step n"""
+   if n >= total:
+      return p_final
+   else:
+      return p_initial - (n * (p_initial - p_final)) / (total)
 
 
 def batch_norm(x, name, epsilon=1e-5, momentum=0.9, train=True):
